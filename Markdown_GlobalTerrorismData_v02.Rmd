@@ -1,0 +1,189 @@
+---
+title: "Global Terrorism Dataset - Kaggle"
+output: html_document
+---
+
+In this script I'm not going to be doing any real data analysis, but rather plan on implementing a cool visualization technique I've been thinking about for a while. Specifically, it will look like this:
+
+![](https://github.com/rpkelley/global_terrorism_data/blob/master/GlobalTerrorism_SemiCirclePlot.png?raw=true)
+
+Let's start by importing just a few packages that we'll need along the way:
+
+```{r message=FALSE}
+require( dplyr )
+require( lubridate )
+```
+
+Next we import the terrorism dataset that we'll be working with:
+
+```{r}
+terror.data <- read.csv( 'globalterrorismdb_0617dist.csv' , header = T , stringsAsFactors = F )
+```
+
+For the sake of space in the visualization, I only plan on working with the United States portion of the dataset. Let's filter by country and also only look at events since 1990:
+
+```{r}
+# Filter for only those events within the United States AND since 1990
+us.terror.data <- terror.data[  which( terror.data$country_txt == 'United States' &
+                                         terror.data$iyear >= 1990 ), ]
+
+# Some other housekeeping items: create an ordered list of unique state names and
+# also create a monthly date sequence that we'll use later
+state.list <- us.terror.data$provstate %>% unique
+state.list <- state.list[ order( state.list , decreasing = F ) ]
+date.list <- seq( from = as.Date( '1990-01-01' ) , to = today() , by = "1 month" )
+
+```
+
+
+In the next section I use a FOR loop to go through each of the terrorism events reminaing in our dataset after filtering. We use the loop to assign the attack to the correct date column and the correct state row. The result is a matrix with a 1 if there was an attack at that date/time, and a 0 otherwise.
+
+```{r}
+# Initialize a matrix to store the binary terrorism data
+events <- array( 0 , c( length(state.list) , length(date.list) ) )
+rownames(events) <- state.list
+colnames(events) <- as.character( date.list )
+
+for( event in 1:nrow(us.terror.data) ) {
+  
+  date.column = which( 
+    date.list ==
+      as.Date( 
+        paste0( us.terror.data$iyear[event] , '-' , us.terror.data$imonth[event] , '-01' )
+      )
+  )
+  
+  state.row = which( state.list == us.terror.data$provstate[event] )
+  
+  events[ state.row , date.column ] = 1
+  
+}
+```
+
+We'll color the output based on attack success or failure, so define a color scheme for that now:
+
+```{r}
+colors.success <- array( rgb(174/255,27/255,33/255,0.5) , length( us.terror.data$success ) )
+colors.success[ us.terror.data$success == 1 ] <- rgb(10/255,55/255,130/255,0.5)
+```
+
+To make this visualization I wrote two custom functions. The first is immediately below and accept a binary event matrix of 1's and 0's just like the one we created above:
+
+```{r}
+TIMELINE.PLOT <- function(
+  y  # the input.matrix
+  , ellipse.width.a = 10
+  , ellipse.height.b = 0.5
+  , column.labels = state.list
+  , circle.colors = colors.success
+) {
+  # plot lines for each row
+  yn = nrow(y)
+  xn = ncol(y)
+  
+  # determine the semi-circle centers
+  circle.centers = c()
+  for( row in 1:yn ) {
+    for( col in 1:xn ) {
+      if( y[ row,col ] == 1 ) {
+        circle.centers = rbind( circle.centers , c( col , row ) )
+      }
+    }
+  }
+  
+  # plot the semi-circle centers
+  plot.new()
+  par( mar = c( 0.5,5,0.25,0.5))
+  plot( 
+    x =  circle.centers[,1] 
+    , y = circle.centers[,2] 
+    , type = 'p' 
+    , xlim = c( 1 , xn )
+    , ylim = c( 0 , yn+1 )
+    , col = 'white'
+    , pch = 19
+    , cex = 0.01
+    , xaxt = 'n' 
+    , yaxt = 'n'
+    , ylab = NA
+    , xlab = NA
+    , bty = 'n'
+  )
+  par( new = T )
+  
+  # add the horizontal lines
+  for( row in  1:yn ) {
+    abline( 
+      h = row
+      , col = rgb( 209/255 , 212/255, 211/255)
+      , lty = 1
+      , lwd = 0.5
+    )
+  }
+  
+  for( k in 1:nrow( circle.centers ) ) {
+    SEMI.CIRCLE.PLOT( 
+      circle.center = c( circle.centers[k,1] , circle.centers[k,2] ) 
+      , circle.fill.color = circle.colors[ k ] 
+      , ellipse.width.a = ellipse.width.a
+      , ellipse.height.b =  ellipse.height.b
+    )
+  }
+  
+  # label the axes
+  par(cex.axis = 0.5)
+  axis( 2 , at = 1:yn , labels = column.labels , tick =F , las = 2 )
+}
+```
+
+This function above also calls another function that will accept a circle center and plot the semi-circle around it:
+
+```{r}
+SEMI.CIRCLE.PLOT <- function(
+  circle.center = c(200,1) # the x and y coordinate, respectively, of the center
+  , circle.fill.color = 'red'
+  , ellipse.width.a = 10
+  , ellipse.height.b = 0.5
+) {
+  
+  # compute the upper arc coordinates
+  min.x = circle.center[1] - ellipse.width.a
+  max.x = circle.center[1] + ellipse.width.a
+  
+  # generate evenly spaced x coordinates
+  xs = seq( from = min.x , to = max.x , by = (max.x - min.x) / (10^3) )
+  
+  # give the xs to a function that returns the circle / arc ys
+  ys = sapply( xs, FUN = function(x) {
+    delta.x = abs( x - circle.center[1] )
+    y =  sqrt( ( 1 - ( delta.x**2 / ellipse.width.a**2 ) ) * ( ellipse.height.b**2 ) ) + circle.center[2]
+    return(y)
+  })
+  
+  base.ys = array( circle.center[2] , length( xs) )
+  ys = c( ys , base.ys )
+  xs = c( xs , rev(xs) )
+  
+  # plot the semi circle as a polygon
+  polygon( 
+    x =  xs
+    , y = ys  
+    , col = circle.fill.color 
+    , border = NA
+    , lwd = 0.1
+  )
+  
+}
+```
+
+With all that done, we can feed the event matrix to our newly created functions:
+
+```{r}
+TIMELINE.PLOT( 
+  y = events
+  , ellipse.width.a =  5
+  , ellipse.height.b = 0.8
+  , column.labels = state.list
+  , circle.colors = colors.success
+)
+```
